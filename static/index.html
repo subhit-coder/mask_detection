@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Mask Detection</title>
+
+    <style>
+        body {
+            text-align: center;
+            font-family: Arial;
+        }
+
+        #camera-container {
+            position: relative;
+            display: inline-block;
+        }
+
+        video, canvas {
+            border: 2px solid black;
+            margin-top: 10px;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        #result {
+            font-size: 22px;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>😷 Live Mask Detection</h1>
+
+<div id="camera-container" style="position: relative; display: inline-block;">
+    <video id="video" width="640" autoplay muted playsinline></video>
+    <canvas id="overlay" style="position: absolute; top: 0; left: 0;"></canvas>
+</div>
+<br>
+
+<button onclick="startCamera()">Start Camera</button>
+<button onclick="detectOnce()">Detect Now</button>
+
+<canvas id="capture" style="display:none;"></canvas>
+
+<div id="result"></div>
+
+<script>
+let video = document.getElementById("video");
+let overlay = document.getElementById("overlay");
+let capture = document.getElementById("capture");
+let overlayCtx = overlay.getContext("2d");
+let captureCtx = capture.getContext("2d");
+let isDetecting = false;
+let detectInterval = null;
+
+function setCanvasSizes() {
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+
+    video.width = width;
+    overlay.width = width;
+    overlay.height = height;
+    overlay.style.width = width + "px";
+    overlay.style.height = height + "px";
+    capture.width = width;
+    capture.height = height;
+}
+
+async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+
+    await new Promise((resolve) => {
+        video.onloadedmetadata = () => {
+            setCanvasSizes();
+            resolve();
+        };
+    });
+
+    if (detectInterval) {
+        clearInterval(detectInterval);
+    }
+    detectInterval = setInterval(detectOnce, 1000);
+}
+
+function clearOverlay() {
+    overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+}
+
+function drawBox(bbox, label, confidence) {
+    clearOverlay();
+    const { x, y, w, h } = bbox;
+    const color = label === "with_mask" ? "#2ecc71" : "#e74c3c";
+
+    overlayCtx.lineWidth = 4;
+    overlayCtx.strokeStyle = color;
+    overlayCtx.fillStyle = color;
+    overlayCtx.strokeRect(x, y, w, h);
+
+    const text = `${label} ${(confidence * 100).toFixed(1)}%`;
+    overlayCtx.font = "18px Arial";
+    overlayCtx.fillText(text, x + 4, y > 24 ? y - 6 : y + 22);
+}
+
+async function detectOnce() {
+    if (!video.srcObject || isDetecting) {
+        return;
+    }
+    isDetecting = true;
+    document.getElementById("result").innerText = "Detecting...";
+
+    captureCtx.drawImage(video, 0, 0, capture.width, capture.height);
+
+    capture.toBlob(async (blob) => {
+        if (!blob) {
+            isDetecting = false;
+            return;
+        }
+
+        let formData = new FormData();
+        formData.append("file", blob, "frame.jpg");
+
+        try {
+            let response = await fetch("http://127.0.0.1:8000/predict", {
+                method: "POST",
+                body: formData,
+            });
+
+            let data = await response.json();
+
+            if (!response.ok) {
+                clearOverlay();
+                document.getElementById("result").innerText = data.detail || "Detection failed";
+            } else {
+                drawBox(data.bbox, data.label, data.confidence);
+                document.getElementById("result").innerText = `${data.label} | ${(data.confidence * 100).toFixed(1)}%`;
+            }
+        } catch (error) {
+            console.error("API Error:", error);
+            document.getElementById("result").innerText = "Error connecting API";
+            clearOverlay();
+        } finally {
+            isDetecting = false;
+        }
+    }, "image/jpeg");
+}
+</script>
+
+</body>
+</html>
